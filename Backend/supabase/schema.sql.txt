@@ -1,0 +1,152 @@
+-- =============================================
+-- FARMABOT RD — Script de creación de tablas
+-- Ejecutar en Supabase SQL Editor
+-- =============================================
+
+-- 1. FARMACIAS (tabla maestra multi-tenant)
+CREATE TABLE farmacias (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nombre TEXT NOT NULL,
+  telefono_whatsapp TEXT NOT NULL UNIQUE,
+  whatsapp_phone_id TEXT,
+  whatsapp_token TEXT,
+  empleado_escalamiento_telefono TEXT,
+  plan_mensajes_limite INTEGER DEFAULT 500,
+  plan_precio_base DECIMAL(10,2) DEFAULT 1500.00,
+  plan_precio_excedente DECIMAL(10,2) DEFAULT 3.00,
+  activa BOOLEAN DEFAULT true,
+  fecha_creacion TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. MEDICAMENTOS (catálogo por farmacia)
+CREATE TABLE medicamentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  nombre TEXT NOT NULL,
+  nombre_alternativo TEXT,
+  categoria TEXT,
+  precio DECIMAL(10,2) NOT NULL,
+  unidad TEXT DEFAULT 'caja',
+  cantidad_por_unidad INTEGER,
+  disponible BOOLEAN DEFAULT true,
+  requiere_receta BOOLEAN DEFAULT false,
+  es_tratamiento_largo BOOLEAN DEFAULT false,
+  dias_tratamiento INTEGER,
+  fecha_actualizacion TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. CLIENTES (pacientes por farmacia)
+CREATE TABLE clientes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  nombre TEXT,
+  telefono_whatsapp TEXT NOT NULL,
+  activo BOOLEAN DEFAULT true,
+  fecha_primer_contacto TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(farmacia_id, telefono_whatsapp)
+);
+
+-- 4. CONVERSACIONES (historial de chats)
+CREATE TABLE conversaciones (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  cliente_id UUID NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  estado TEXT DEFAULT 'activa' CHECK (estado IN ('activa', 'escalada', 'cerrada')),
+  escalada_a TEXT,
+  fecha_inicio TIMESTAMPTZ DEFAULT NOW(),
+  fecha_ultimo_mensaje TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. MENSAJES (cada mensaje dentro de una conversación)
+CREATE TABLE mensajes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversacion_id UUID NOT NULL REFERENCES conversaciones(id) ON DELETE CASCADE,
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  origen TEXT NOT NULL CHECK (origen IN ('cliente', 'bot', 'humano')),
+  contenido TEXT NOT NULL,
+  tipo TEXT DEFAULT 'texto' CHECK (tipo IN ('texto', 'imagen', 'audio', 'documento')),
+  whatsapp_message_id TEXT UNIQUE,
+  fecha_envio TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. PEDIDOS (órdenes de compra)
+CREATE TABLE pedidos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  cliente_id UUID NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  conversacion_id UUID REFERENCES conversaciones(id),
+  estado TEXT DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'confirmado', 'entregado', 'cancelado')),
+  tipo_entrega TEXT CHECK (tipo_entrega IN ('recoger', 'delivery')),
+  direccion_entrega TEXT,
+  total_estimado DECIMAL(10,2),
+  notas TEXT,
+  fecha_pedido TIMESTAMPTZ DEFAULT NOW(),
+  telefono_contacto TEXT,
+  hora_entrega TEXT,
+  forma_pago TEXT
+);
+
+-- 7. ITEMS_PEDIDO (productos dentro de cada pedido)
+CREATE TABLE items_pedido (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pedido_id UUID NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+  medicamento_id UUID REFERENCES medicamentos(id),
+  nombre_medicamento TEXT NOT NULL,
+  precio_unitario DECIMAL(10,2) NOT NULL,
+  cantidad INTEGER NOT NULL DEFAULT 1,
+  subtotal DECIMAL(10,2) NOT NULL
+);
+
+-- 8. RECORDATORIOS (motor de recompra automática)
+CREATE TABLE recordatorios (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  cliente_id UUID NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  medicamento_id UUID REFERENCES medicamentos(id),
+  pedido_origen_id UUID REFERENCES pedidos(id),
+  fecha_compra_original DATE NOT NULL,
+  fecha_programada_envio DATE NOT NULL,
+  estado TEXT DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'enviado', 'respondido', 'convertido', 'cancelado')),
+  resultado TEXT,
+  fecha_envio_real TIMESTAMPTZ
+);
+
+-- 9. CONTEO_MENSAJES (para tu facturación por volumen)
+CREATE TABLE conteo_mensajes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmacia_id UUID NOT NULL REFERENCES farmacias(id) ON DELETE CASCADE,
+  mes TEXT NOT NULL,
+  total_mensajes INTEGER DEFAULT 0,
+  mensajes_entrantes INTEGER DEFAULT 0,
+  mensajes_salientes INTEGER DEFAULT 0,
+  excedente INTEGER DEFAULT 0,
+  monto_excedente DECIMAL(10,2) DEFAULT 0.00,
+  UNIQUE(farmacia_id, mes)
+);
+
+-- =============================================
+-- ACTIVAR RLS EN TODAS LAS TABLAS
+-- (seguridad obligatoria en Supabase)
+-- =============================================
+ALTER TABLE farmacias ENABLE ROW LEVEL SECURITY;
+ALTER TABLE medicamentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clientes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversaciones ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mensajes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pedidos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE items_pedido ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recordatorios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conteo_mensajes ENABLE ROW LEVEL SECURITY;
+
+-- =============================================
+-- ÍNDICES (para que las consultas sean rápidas)
+-- =============================================
+CREATE INDEX idx_medicamentos_farmacia ON medicamentos(farmacia_id);
+CREATE INDEX idx_clientes_farmacia ON clientes(farmacia_id);
+CREATE INDEX idx_clientes_telefono ON clientes(telefono_whatsapp);
+CREATE INDEX idx_conversaciones_cliente ON conversaciones(cliente_id);
+CREATE INDEX idx_mensajes_conversacion ON mensajes(conversacion_id);
+CREATE INDEX idx_pedidos_cliente ON pedidos(cliente_id);
+CREATE INDEX idx_recordatorios_fecha ON recordatorios(fecha_programada_envio);
+CREATE INDEX idx_recordatorios_estado ON recordatorios(estado);
+CREATE INDEX idx_conteo_farmacia_mes ON conteo_mensajes(farmacia_id, mes);

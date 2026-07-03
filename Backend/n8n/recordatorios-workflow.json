@@ -1,0 +1,376 @@
+{
+  "name": "FarmaBot-RD — Recordatorios de recompra",
+  "nodes": [
+    {
+      "id": "trigger-8am",
+      "name": "Trigger diario 8am RD",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get-recordatorios",
+      "name": "Buscar recordatorios de hoy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/recordatorios",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "estado", "value": "eq.pendiente" },
+            { "name": "fecha_programada_envio", "value": "=eq.{{$today.toFormat('yyyy-MM-dd')}}" },
+            { "name": "select", "value": "*,clientes(*),medicamentos(*),farmacias(*)" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_ANON_KEY" }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Supabase Service Role" }
+      }
+    },
+    {
+      "id": "get-conversacion",
+      "name": "Buscar conversación activa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0],
+      "notes": "Full Response ON a propósito: así siempre llega 1 item por recordatorio, aunque no exista conversación (body = []). Si tu versión de n8n no respeta esto, activa manualmente Options → Response → Full Response.",
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/conversaciones",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "cliente_id", "value": "=eq.{{$json.cliente_id}}" },
+            { "name": "farmacia_id", "value": "=eq.{{$json.farmacia_id}}" },
+            { "name": "estado", "value": "eq.activa" },
+            { "name": "order", "value": "fecha_inicio.desc" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_ANON_KEY" }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": { "response": { "fullResponse": true } }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Supabase Service Role" }
+      }
+    },
+    {
+      "id": "armar-mensaje",
+      "name": "Armar datos y mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 0],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $('Buscar recordatorios de hoy').item.json;\nconst cliente = original.clientes || {};\nconst medicamento = original.medicamentos || {};\nconst farmacia = original.farmacias || {};\nconst conversaciones = ($input.item.json.body) || [];\nconst conversacion = conversaciones[0] || null;\n\nconst saludo = cliente.nombre ? `Hola ${cliente.nombre}` : 'Hola';\nconst medicamentoNombre = medicamento.nombre || 'tu medicamento';\nconst mensaje = `${saludo}, ¿Cómo va tu tratamiento de ${medicamentoNombre}? Hace 25 días que iniciaste, es tiempo de reabastecer. Escribe aquí o llama para hacer tu pedido`;\n\nreturn {\n  json: {\n    recordatorio_id: original.id,\n    cliente_id: original.cliente_id,\n    medicamento_id: original.medicamento_id,\n    farmacia_id: original.farmacia_id,\n    pedido_origen_id: original.pedido_origen_id,\n    telefono_whatsapp: cliente.telefono_whatsapp,\n    whatsapp_token: farmacia.whatsapp_token,\n    whatsapp_phone_id: farmacia.whatsapp_phone_id,\n    conversacion_id: conversacion ? conversacion.id : null,\n    mensaje,\n  },\n};"
+      }
+    },
+    {
+      "id": "if-credenciales-wa",
+      "name": "¿Tiene credenciales WhatsApp?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1040, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.whatsapp_token}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            },
+            {
+              "leftValue": "={{$json.whatsapp_phone_id}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "log-sin-credenciales",
+      "name": "Loguear farmacia sin credenciales",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "console.error(`Farmacia ${$json.farmacia_id} no tiene whatsapp_token/whatsapp_phone_id configurado. Se omite el recordatorio ${$json.recordatorio_id}.`);\nreturn [];"
+      }
+    },
+    {
+      "id": "if-existe-conversacion",
+      "name": "¿Existe conversación?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1300, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.conversacion_id}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "crear-conversacion",
+      "name": "Crear conversación",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/conversaciones",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_ANON_KEY" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ farmacia_id: $json.farmacia_id, cliente_id: $json.cliente_id, estado: 'activa' }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Supabase Service Role" }
+      }
+    },
+    {
+      "id": "fijar-conversacion-id",
+      "name": "Fijar conversacion_id nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const base = $('Armar datos y mensaje').item.json;\nconst nuevaConversacion = Array.isArray($json) ? $json[0] : $json;\nreturn {\n  json: {\n    ...base,\n    conversacion_id: nuevaConversacion.id,\n  },\n};"
+      }
+    },
+    {
+      "id": "preparar-envio",
+      "name": "Preparar envío",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1820, 0],
+      "notes": "Punto de reconvergencia de las dos ramas del IF ¿Existe conversación?. Ambas ramas deben conectarse a este nodo.",
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: $input.item.json };"
+      }
+    },
+    {
+      "id": "enviar-whatsapp",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2080, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{$json.whatsapp_phone_id}}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{$json.whatsapp_token}}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.telefono_whatsapp, type: 'text', text: { body: $json.mensaje } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "marcar-enviado",
+      "name": "Marcar recordatorio enviado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2340, -180],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/recordatorios",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "=eq.{{$('Preparar envío').item.json.recordatorio_id}}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_ANON_KEY" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ estado: 'enviado', fecha_envio_real: $now.toISO() }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Supabase Service Role" }
+      }
+    },
+    {
+      "id": "guardar-mensaje-bot",
+      "name": "Guardar mensaje del bot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2340, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/mensajes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_ANON_KEY" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ conversacion_id: $('Preparar envío').item.json.conversacion_id, farmacia_id: $('Preparar envío').item.json.farmacia_id, origen: 'bot', contenido: $('Preparar envío').item.json.mensaje }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Supabase Service Role" }
+      }
+    },
+    {
+      "id": "crear-proximo-recordatorio",
+      "name": "Crear próximo recordatorio (+30 días)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2340, 180],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/recordatorios",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_ANON_KEY" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ farmacia_id: $('Preparar envío').item.json.farmacia_id, cliente_id: $('Preparar envío').item.json.cliente_id, medicamento_id: $('Preparar envío').item.json.medicamento_id, pedido_origen_id: $('Preparar envío').item.json.pedido_origen_id, fecha_compra_original: $now.toFormat('yyyy-MM-dd'), fecha_programada_envio: $now.plus({days: 30}).toFormat('yyyy-MM-dd'), estado: 'pendiente' }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ME", "name": "Supabase Service Role" }
+      }
+    },
+    {
+      "id": "sticky-setup",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -420],
+      "parameters": {
+        "height": 380,
+        "width": 700,
+        "content": "## Antes de activar este workflow\n\n1. **Credencial Supabase**: crea una credencial tipo *Header Auth* llamada exactamente `Supabase Service Role`, con Header Name `Authorization` y Header Value `Bearer <tu SUPABASE_SERVICE_ROLE_KEY>`. Está en tu `.env` del backend. Reemplaza esa credencial en cada nodo HTTP Request que la referencia (n8n te va a avisar que falta al importar).\n2. **apikey**: en cada nodo HTTP Request hay un header `apikey` con el valor literal `YOUR_SUPABASE_ANON_KEY` — reemplázalo por tu Supabase anon key (o por tu service role key también, funciona igual, pero el patrón estándar de Supabase es apikey=anon + Authorization=service_role).\n3. **Variable de entorno `SUPABASE_URL`**: este workflow usa `{{$env.SUPABASE_URL}}`. En n8n self-hosted, agrégala en las variables de entorno del proceso de n8n (o reemplaza cada `{{$env.SUPABASE_URL}}` por la URL literal `https://cxywhumyofvccebsddoi.supabase.co`).\n4. **whatsapp_token / whatsapp_phone_id**: se leen de la fila de `farmacias` en Supabase, NO de credenciales de n8n — cada farmacia necesita esas dos columnas rellenas.\n5. **No pude probar este workflow contra tu instancia real de n8n.** Ejecútalo manualmente (Execute Workflow) con 1-2 recordatorios de prueba antes de activarlo en modo automático, y revisa el output de cada nodo, en especial 'Buscar conversación activa' (Full Response) — si tu versión de n8n no trae el toggle exactamente igual, actívalo a mano en Options → Response."
+      }
+    }
+  ],
+  "connections": {
+    "Trigger diario 8am RD": {
+      "main": [[{ "node": "Buscar recordatorios de hoy", "type": "main", "index": 0 }]]
+    },
+    "Buscar recordatorios de hoy": {
+      "main": [[{ "node": "Buscar conversación activa", "type": "main", "index": 0 }]]
+    },
+    "Buscar conversación activa": {
+      "main": [[{ "node": "Armar datos y mensaje", "type": "main", "index": 0 }]]
+    },
+    "Armar datos y mensaje": {
+      "main": [[{ "node": "¿Tiene credenciales WhatsApp?", "type": "main", "index": 0 }]]
+    },
+    "¿Tiene credenciales WhatsApp?": {
+      "main": [
+        [{ "node": "¿Existe conversación?", "type": "main", "index": 0 }],
+        [{ "node": "Loguear farmacia sin credenciales", "type": "main", "index": 0 }]
+      ]
+    },
+    "¿Existe conversación?": {
+      "main": [
+        [{ "node": "Preparar envío", "type": "main", "index": 0 }],
+        [{ "node": "Crear conversación", "type": "main", "index": 0 }]
+      ]
+    },
+    "Crear conversación": {
+      "main": [[{ "node": "Fijar conversacion_id nueva", "type": "main", "index": 0 }]]
+    },
+    "Fijar conversacion_id nueva": {
+      "main": [[{ "node": "Preparar envío", "type": "main", "index": 0 }]]
+    },
+    "Preparar envío": {
+      "main": [[{ "node": "Enviar WhatsApp", "type": "main", "index": 0 }]]
+    },
+    "Enviar WhatsApp": {
+      "main": [
+        [
+          { "node": "Marcar recordatorio enviado", "type": "main", "index": 0 },
+          { "node": "Guardar mensaje del bot", "type": "main", "index": 0 },
+          { "node": "Crear próximo recordatorio (+30 días)", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Santo_Domingo"
+  }
+}
