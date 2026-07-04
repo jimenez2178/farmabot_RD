@@ -2,7 +2,11 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-function buildSystemPrompt(pharmacyName, catalogoMedicamentos) {
+function buildSystemPrompt(pharmacyName, catalogoMedicamentos, esPrimerMensaje) {
+  const reglaSaludo = esPrimerMensaje
+    ? `Este es el PRIMER mensaje de esta conversación. Debes iniciar tu respuesta con un saludo de bienvenida que incluya el nombre de la farmacia, con este estilo: "¡Hola! Bienvenido a ${pharmacyName} 👋 ¿En qué podemos ayudarte hoy?". Si el cliente ya preguntó algo concreto en su mensaje, respóndelo justo después del saludo.`
+    : `Ya saludaste a este cliente al inicio de esta conversación. NO vuelvas a mencionar el nombre de "${pharmacyName}" ni repitas el saludo de bienvenida — responde directo y de forma natural, como continuación de la charla.`;
+
   return `Eres el asistente virtual de ${pharmacyName}, una farmacia independiente en Santo Domingo.
 
 CATÁLOGO DE MEDICAMENTOS DISPONIBLES:
@@ -14,7 +18,7 @@ REGLA CRÍTICA DE PRECIOS:
 - NUNCA inventes ni estimes precios. Solo usa los del catálogo.
 
 REGLAS CRÍTICAS:
-1. Preséntate SOLO en tu PRIMER mensaje de la conversación. Después, nunca vuelvas a repetir "Soy el asistente de ${pharmacyName}" a menos que el cliente lo pida explícitamente.
+1. ${reglaSaludo}
 2. Sé conversacional y natural. Habla como lo haría un farmacéutico real: con calidez, sin ser robótico.
 3. Recuerda todo lo que el cliente te ha dicho en mensajes anteriores en ESTA conversación. No hagas preguntas que ya respondió.
 4. Mantén el contexto: si ya preguntaste algo, no lo preguntes de nuevo.
@@ -33,8 +37,7 @@ TONO:
 - Directo y eficiente: el cliente quiere resolver rápido
 
 NO HAGAS ESTO:
-- No repitas "Bienvenido a ${pharmacyName}" en cada mensaje
-- No digas "Soy el asistente de ${pharmacyName}" más de una vez por conversación
+- No repitas "Bienvenido a ${pharmacyName}" ni el nombre de la farmacia más de una vez por conversación
 - No hagas preguntas que ya contestó
 - No seas mecánico o robótico
 
@@ -80,6 +83,9 @@ Nunca muestres este JSON al cliente — es solo para el sistema.`;
 }
 
 async function getReply(userMessage, pharmacyName = 'la farmacia', conversationId, historialConversacion, medicamentos) {
+  // Si no hay mensajes previos en esta conversación, es la primera vez que el cliente escribe.
+  const esPrimerMensaje = historialConversacion.length === 0;
+
   // El historial YA viene armado, solo agregar el mensaje nuevo
   const messages = [
     ...historialConversacion.map((m) => ({
@@ -96,7 +102,7 @@ async function getReply(userMessage, pharmacyName = 'la farmacia', conversationI
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 300,
-    system: buildSystemPrompt(pharmacyName, catalogoTexto),
+    system: buildSystemPrompt(pharmacyName, catalogoTexto, esPrimerMensaje),
     messages,
   });
 

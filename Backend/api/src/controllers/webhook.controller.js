@@ -42,6 +42,24 @@ function extractIncomingTextMessage(value) {
   return { from: message.from, text: message.text.body, whatsappMessageId: message.id };
 }
 
+// Claude solo menciona el total en el mensaje de texto al cliente, no lo incluye
+// en el JSON del pedido. Lo recalculamos aquí a partir del catálogo (misma fuente
+// de precios que usa Claude) para no depender de que la IA haga bien la aritmética.
+function calcularTotalEstimado(nombreMedicamento, cantidad, medicamentos) {
+  if (!nombreMedicamento || !cantidad) return null;
+
+  const texto = nombreMedicamento.toLowerCase();
+  const match = medicamentos.find((m) => {
+    const nombre = m.nombre?.toLowerCase();
+    const alterno = m.nombre_alternativo?.toLowerCase();
+    return (nombre && (texto.includes(nombre) || nombre.includes(texto)))
+      || (alterno && (texto.includes(alterno) || alterno.includes(texto)));
+  });
+
+  if (!match) return null;
+  return Number(match.precio) * Number(cantidad);
+}
+
 async function handleIncomingMessage(message, phoneNumberId) {
   const farmacia = await supabaseService.findFarmaciaByPhoneNumberId(phoneNumberId);
   if (!farmacia) {
@@ -76,6 +94,8 @@ async function handleIncomingMessage(message, phoneNumberId) {
   console.log('Respuesta de Claude:', texto);
 
   if (pedido) {
+    const totalEstimado = calcularTotalEstimado(pedido.medicamento, pedido.cantidad, medicamentos);
+
     await supabaseService.guardarPedido({
       farmaciaId: farmacia.id,
       clienteId: cliente.id,
@@ -88,6 +108,7 @@ async function handleIncomingMessage(message, phoneNumberId) {
       horaEntrega: pedido.hora_entrega,
       formaPago: pedido.forma_pago,
       estado: 'pendiente',
+      totalEstimado,
     });
   }
 

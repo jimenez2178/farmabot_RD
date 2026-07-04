@@ -107,6 +107,7 @@ async function guardarPedido({
   horaEntrega,
   formaPago,
   estado,
+  totalEstimado,
 }) {
   const { data, error } = await supabase
     .from('pedidos')
@@ -122,6 +123,7 @@ async function guardarPedido({
       hora_entrega: horaEntrega,
       forma_pago: formaPago,
       notas: `${medicamento} x${cantidad}`,
+      total_estimado: totalEstimado,
     }])
     .select()
     .single();
