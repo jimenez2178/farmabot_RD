@@ -2,6 +2,7 @@
   "name": "farmabot-rd-api",
   "version": "1.0.0",
   "description": "Backend de FarmaBot-RD: recibe y responde el webhook de WhatsApp Cloud API",
+  "engines": { "node": ">=22.0.0" },
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
