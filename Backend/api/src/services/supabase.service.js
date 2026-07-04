@@ -1,6 +1,14 @@
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+// Node 18 no trae WebSocket nativo (llegó en Node 22). El cliente de Supabase
+// intenta detectarlo al crearse aunque este bot no use canales realtime, así
+// que le indicamos explícitamente que use el paquete "ws" como transporte.
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  realtime: {
+    transport: WebSocket,
+  },
+});
 
 async function findFarmaciaByPhoneNumberId(phoneNumberId) {
   const { data, error } = await supabase
