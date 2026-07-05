@@ -70,6 +70,7 @@ async function handleIncomingMessage(message, phoneNumberId) {
   const cliente = await supabaseService.findOrCreateCliente(farmacia.id, message.from);
   const conversacion = await supabaseService.findOrCreateConversacionActiva(farmacia.id, cliente.id);
   const medicamentos = await supabaseService.obtenerMedicamentosFarmacia(farmacia.id);
+  const sucursalesActivas = await supabaseService.obtenerSucursalesActivas(farmacia.id);
 
   // TRAER el historial ANTES de guardar el mensaje
   const historialConversacion = await supabaseService.obtenerHistorialConversacion(conversacion.id);
@@ -84,32 +85,50 @@ async function handleIncomingMessage(message, phoneNumberId) {
   });
 
   // LLAMAR a getReply con el historial que NO incluye el mensaje actual
-  const { texto, pedido } = await claudeService.getReply(
+  let { texto, pedido } = await claudeService.getReply(
     message.text,
     farmacia.nombre,
     conversacion.id,
     historialConversacion,
     medicamentos,
+    sucursalesActivas,
   );
   console.log('Respuesta de Claude:', texto);
 
   if (pedido) {
-    const totalEstimado = calcularTotalEstimado(pedido.medicamento, pedido.cantidad, medicamentos);
+    if (sucursalesActivas.length === 0) {
+      // No hay ninguna sucursal activa registrada: no se puede asociar el pedido.
+      // No se guarda el pedido y se avisa al cliente en vez de confirmarlo.
+      console.error(`Farmacia ${farmacia.id} no tiene sucursales activas registradas. Pedido no guardado.`);
+      texto = 'Lo sentimos, en este momento tenemos un problema técnico para procesar tu pedido. Por favor contáctanos directamente para completarlo.';
+    } else {
+      const totalEstimado = calcularTotalEstimado(pedido.medicamento, pedido.cantidad, medicamentos);
 
-    await supabaseService.guardarPedido({
-      farmaciaId: farmacia.id,
-      clienteId: cliente.id,
-      conversacionId: conversacion.id,
-      medicamento: pedido.medicamento,
-      cantidad: pedido.cantidad,
-      tipoEntrega: pedido.tipo_entrega,
-      direccion: pedido.direccion,
-      telefonoContacto: pedido.telefono_contacto,
-      horaEntrega: pedido.hora_entrega,
-      formaPago: pedido.forma_pago,
-      estado: 'pendiente',
-      totalEstimado,
-    });
+      // Con 1 sola sucursal activa se asigna automáticamente. Con varias, se usa
+      // la que el cliente eligió (Claude la anota por su nombre exacto en el JSON).
+      const sucursalId = sucursalesActivas.length === 1
+        ? sucursalesActivas[0].id
+        : (sucursalesActivas.find(
+          (s) => s.nombre.toLowerCase() === (pedido.sucursal || '').toLowerCase(),
+        )?.id ?? null);
+
+      await supabaseService.guardarPedido({
+        farmaciaId: farmacia.id,
+        clienteId: cliente.id,
+        conversacionId: conversacion.id,
+        medicamento: pedido.medicamento,
+        cantidad: pedido.cantidad,
+        tipoEntrega: pedido.tipo_entrega,
+        direccion: pedido.direccion,
+        telefonoContacto: pedido.telefono_contacto,
+        horaEntrega: pedido.hora_entrega,
+        formaPago: pedido.forma_pago,
+        comprobanteFiscal: pedido.comprobanteFiscal,
+        sucursalId,
+        estado: 'pendiente',
+        totalEstimado,
+      });
+    }
   }
 
   await supabaseService.guardarMensaje({

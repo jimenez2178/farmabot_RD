@@ -2,10 +2,20 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-function buildSystemPrompt(pharmacyName, catalogoMedicamentos, esPrimerMensaje) {
+function buildSystemPrompt(pharmacyName, catalogoMedicamentos, esPrimerMensaje, sucursalesActivas = []) {
   const reglaSaludo = esPrimerMensaje
     ? `Este es el PRIMER mensaje de esta conversación. Debes iniciar tu respuesta con un saludo de bienvenida que incluya el nombre de la farmacia, con este estilo: "¡Hola! Bienvenido a ${pharmacyName} 👋 ¿En qué podemos ayudarte hoy?". Si el cliente ya preguntó algo concreto en su mensaje, respóndelo justo después del saludo.`
     : `Ya saludaste a este cliente al inicio de esta conversación. NO vuelvas a mencionar el nombre de "${pharmacyName}" ni repitas el saludo de bienvenida — responde directo y de forma natural, como continuación de la charla.`;
+
+  // Solo se pregunta por la sucursal cuando hay más de una activa para esta farmacia.
+  // Si hay 0 o 1, el backend la asigna automáticamente sin involucrar al cliente.
+  const reglaSucursal = sucursalesActivas.length > 1
+    ? `
+
+SUCURSAL:
+- Esta farmacia tiene más de una sucursal activa. Antes de confirmar el pedido, pregunta: "¿En cuál de nuestras sucursales prefieres recibir/retirar tu pedido: ${sucursalesActivas.map((s) => s.nombre).join(', ')}?"
+- Espera la respuesta y anota el nombre EXACTO (tal cual aparece en la lista) de la sucursal elegida en el campo "sucursal" del JSON.`
+    : '';
 
   return `Eres el asistente virtual de ${pharmacyName}, una farmacia independiente en Santo Domingo.
 
@@ -50,12 +60,11 @@ REGLAS DE CONVERSACIÓN:
 - Cuando el cliente pida un medicamento sin especificar presentación (cápsulas, tabletas, jarabe, etc.), asume la presentación más común para ese medicamento y confírmala en tu respuesta en vez de preguntar. Ejemplo: "Omeprazol 20mg en cápsulas, ¿correcto?" Solo pregunta si hay ambigüedad real.
 - Nunca calcules cambio. Si el cliente pregunta por el cambio de un pago en efectivo, responde siempre: "El cambio se coordina directamente con el repartidor al momento de la entrega."
 
-FORMA DE PAGO:
-- Antes de confirmar el pedido final, SIEMPRE pregunta: "¿Pagarás en efectivo o con tarjeta?"
+PREGUNTAS DE CIERRE DEL PEDIDO:
+- Antes de confirmar el pedido final, SIEMPRE pregunta en un mismo mensaje: "¿Pagarás en efectivo o con tarjeta, y necesitas comprobante fiscal (factura) o no?"
 - Espera la respuesta antes de confirmar el pedido.
-- Si el cliente dice efectivo, anótalo.
-- Si el cliente dice tarjeta, anótalo.
-- Nunca calcules cambio ni preguntes con cuánto va a pagar.
+- Anota la forma de pago (efectivo o tarjeta) y si el cliente necesita o no comprobante fiscal.
+- Nunca calcules cambio ni preguntes con cuánto va a pagar.${reglaSucursal}
 
 SALVAGUARDA DE SALUD (CRÍTICO):
 - Si el cliente pregunta sobre síntomas, diagnósticos, dosis médicas específicas, interacciones entre medicamentos, o cualquier cosa que suene a consejo médico, NUNCA lo respondas ni des una opinión.
@@ -74,7 +83,9 @@ Cuando el cliente confirme un pedido completo (medicamento, cantidad, forma de e
   "direccion": "dirección o null si es retiro",
   "telefono_contacto": "teléfono o null si es retiro",
   "hora_entrega": "hora o null si no se especificó",
-  "forma_pago": "efectivo" o "tarjeta"
+  "forma_pago": "efectivo" o "tarjeta",
+  "comprobanteFiscal": true o false,
+  "sucursal": "nombre EXACTO de la sucursal elegida, o null si no se preguntó"
 }
 [/PEDIDO_CONFIRMADO]
 
@@ -82,7 +93,7 @@ Después del JSON, continúa con tu mensaje normal al cliente.
 Nunca muestres este JSON al cliente — es solo para el sistema.`;
 }
 
-async function getReply(userMessage, pharmacyName = 'la farmacia', conversationId, historialConversacion, medicamentos) {
+async function getReply(userMessage, pharmacyName = 'la farmacia', conversationId, historialConversacion, medicamentos, sucursalesActivas = []) {
   // Si no hay mensajes previos en esta conversación, es la primera vez que el cliente escribe.
   const esPrimerMensaje = historialConversacion.length === 0;
 
@@ -102,7 +113,7 @@ async function getReply(userMessage, pharmacyName = 'la farmacia', conversationI
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 300,
-    system: buildSystemPrompt(pharmacyName, catalogoTexto, esPrimerMensaje),
+    system: buildSystemPrompt(pharmacyName, catalogoTexto, esPrimerMensaje, sucursalesActivas),
     messages,
   });
 

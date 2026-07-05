@@ -106,6 +106,8 @@ async function guardarPedido({
   telefonoContacto,
   horaEntrega,
   formaPago,
+  comprobanteFiscal,
+  sucursalId,
   estado,
   totalEstimado,
 }) {
@@ -122,6 +124,8 @@ async function guardarPedido({
       telefono_contacto: telefonoContacto,
       hora_entrega: horaEntrega,
       forma_pago: formaPago,
+      comprobante_fiscal: !!comprobanteFiscal,
+      sucursal_id: sucursalId,
       notas: `${medicamento} x${cantidad}`,
       total_estimado: totalEstimado,
     }])
@@ -130,6 +134,17 @@ async function guardarPedido({
 
   if (error) throw error;
   return data;
+}
+
+async function obtenerSucursalesActivas(farmaciaId) {
+  const { data, error } = await supabase
+    .from('sucursales')
+    .select('id, nombre')
+    .eq('farmacia_id', farmaciaId)
+    .eq('activa', true);
+
+  if (error) throw error;
+  return data || [];
 }
 
 async function obtenerMedicamentosFarmacia(farmaciaId) {
@@ -152,4 +167,5 @@ module.exports = {
   obtenerHistorialConversacion,
   guardarPedido,
   obtenerMedicamentosFarmacia,
+  obtenerSucursalesActivas,
 };
