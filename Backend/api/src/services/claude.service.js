@@ -100,7 +100,7 @@ Cuando el cliente confirme un pedido completo (medicamento, cantidad, forma de e
 }
 [/PEDIDO_CONFIRMADO]
 
-Después del JSON, continúa con tu mensaje normal al cliente.
+Después del JSON, el sistema genera automáticamente un resumen formateado del pedido y se lo envía al cliente — no hace falta que redactes un resumen tú mismo. Puedes escribir cualquier frase corta de cierre en este punto, no se le mostrará al cliente.
 Nunca muestres este JSON al cliente — es solo para el sistema.`;
 }
 

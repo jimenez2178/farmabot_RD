@@ -68,6 +68,45 @@ function calcularTotalEstimado(nombreMedicamento, cantidad, medicamentos) {
   return Number(match.precio) * Number(cantidad);
 }
 
+// El formato es exacto (emojis, separadores, líneas condicionales), así que se arma
+// aquí con los datos ya estructurados en vez de confiar en que Claude lo redacte igual
+// cada vez.
+function construirResumenPedido(pedido, {
+  sucursalNombre, totalEstimado, fotoCarnetUrl, fotoCedulaUrl,
+}) {
+  const esDelivery = pedido.tipo_entrega === 'delivery';
+  const esSeguro = pedido.tipo_cobertura === 'seguro';
+
+  const lineas = [
+    '📋 *Resumen de tu Pedido*',
+    '─────────────────',
+    `📍 *Sucursal:* ${sucursalNombre}`,
+    '💊 *Productos:*',
+    `   • ${pedido.cantidad}x ${pedido.medicamento}`,
+    `💰 *Total:* RD$${totalEstimado != null ? Number(totalEstimado).toFixed(2) : 'Por confirmar'}`,
+    `🏥 *Cobertura:* ${esSeguro ? `Seguro (${pedido.nombre_seguro})` : 'Particular'}`,
+  ];
+
+  if (esSeguro && fotoCarnetUrl && fotoCedulaUrl) {
+    lineas.push('📎 *Documentos recibidos:* Carnet ✅ | Cédula ✅');
+  }
+
+  lineas.push(`🚚 *Entrega:* ${esDelivery ? 'Delivery' : 'Retiro en sucursal'}`);
+
+  if (esDelivery) {
+    lineas.push(`📌 *Dirección:* ${pedido.direccion}`);
+  }
+
+  lineas.push(`💳 *Forma de pago:* ${pedido.forma_pago === 'tarjeta' ? 'Tarjeta' : 'Efectivo'}`);
+  lineas.push(`🧾 *Comprobante fiscal:* ${pedido.comprobanteFiscal ? 'Sí' : 'No'}`);
+  lineas.push('─────────────────');
+  lineas.push(esDelivery
+    ? '✅ ¡Pedido confirmado! Te contactaremos para coordinar la entrega.'
+    : `✅ ¡Pedido confirmado! Te esperamos en ${sucursalNombre}.`);
+
+  return lineas.join('\n');
+}
+
 async function handleIncomingMessage(message, phoneNumberId) {
   const farmacia = await supabaseService.findFarmaciaByPhoneNumberId(phoneNumberId);
   if (!farmacia) {
@@ -254,6 +293,17 @@ async function continuarFlujoClaude({
         nombreSeguro: pedido.nombre_seguro,
         fotoCarnetUrl: contextoPedido.foto_carnet_url || null,
         fotoCedulaUrl: contextoPedido.foto_cedula_url || null,
+      });
+
+      const sucursalNombre = sucursalesActivas.length === 1
+        ? sucursalesActivas[0].nombre
+        : (pedido.sucursal || sucursalesActivas.find((s) => s.id === sucursalId)?.nombre || 'nuestra farmacia');
+
+      texto = construirResumenPedido(pedido, {
+        sucursalNombre,
+        totalEstimado,
+        fotoCarnetUrl: contextoPedido.foto_carnet_url,
+        fotoCedulaUrl: contextoPedido.foto_cedula_url,
       });
 
       if (Object.keys(contextoPedido).length > 0) {
