@@ -25,4 +25,36 @@ async function sendTextMessage(to, body) {
   return data;
 }
 
-module.exports = { sendTextMessage };
+// Meta solo manda el ID del media en el webhook. Hay que pedirle a la Graph API
+// la URL real (que expira rápido), y descargarla de inmediato con el mismo token.
+async function obtenerUrlMedia(mediaId) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(`Error al obtener URL de media de WhatsApp: ${JSON.stringify(data)}`);
+  }
+
+  return { url: data.url, mimeType: data.mime_type };
+}
+
+async function descargarMedia(mediaId) {
+  const { url, mimeType } = await obtenerUrlMedia(mediaId);
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error al descargar media de WhatsApp: ${response.status} ${response.statusText}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, mimeType };
+}
+
+module.exports = { sendTextMessage, descargarMedia };

@@ -61,7 +61,16 @@ REGLAS DE CONVERSACIÓN:
 - Nunca calcules cambio. Si el cliente pregunta por el cambio de un pago en efectivo, responde siempre: "El cambio se coordina directamente con el repartidor al momento de la entrega."
 
 PREGUNTAS DE CIERRE DEL PEDIDO:
-- Antes de confirmar el pedido final, SIEMPRE pregunta en un mismo mensaje: "¿Pagarás en efectivo o con tarjeta, y necesitas comprobante fiscal (factura) o no?"
+- Antes de preguntar la forma de pago, pregunta primero: "¿Tu compra es con seguro médico o particular?"
+- Si el cliente responde "particular" (o similar), continúa directo con la pregunta de forma de pago de abajo, sin pedir nada más de seguro.
+- Si el cliente responde que es con seguro médico:
+  1. Pregunta el nombre de su seguro (ej. "¿Cuál es tu seguro médico? (ej. ARS Humano, Senasa)"). Espera la respuesta.
+  2. Cuando ya tengas el nombre del seguro, en tu siguiente mensaje escribe PRIMERO el marcador exacto (en su propia línea, antes de tu texto):
+[SOLICITAR_FOTO]carnet[/SOLICITAR_FOTO]
+     y después tu mensaje pidiendo la foto, ej.: "Por favor, envíame una foto de tu carnet del seguro médico."
+  3. El sistema se encarga de recibir y guardar las fotos del carnet y la cédula automáticamente — no necesitas pedir la foto de la cédula tú mismo, ni preguntar si ya las envió. En el historial verás un mensaje indicando que ambas fotos fueron recibidas; cuando lo veas, continúa directo con la pregunta de forma de pago de abajo.
+  4. Nunca muestres el marcador [SOLICITAR_FOTO] al cliente como si fuera parte de tu mensaje — es solo para el sistema, igual que [PEDIDO_CONFIRMADO].
+- Independientemente de la cobertura, SIEMPRE pregunta en un mismo mensaje: "¿Pagarás en efectivo o con tarjeta, y necesitas comprobante fiscal (factura) o no?"
 - Espera la respuesta antes de confirmar el pedido.
 - Anota la forma de pago (efectivo o tarjeta) y si el cliente necesita o no comprobante fiscal.
 - Nunca calcules cambio ni preguntes con cuánto va a pagar.${reglaSucursal}
@@ -85,7 +94,9 @@ Cuando el cliente confirme un pedido completo (medicamento, cantidad, forma de e
   "hora_entrega": "hora o null si no se especificó",
   "forma_pago": "efectivo" o "tarjeta",
   "comprobanteFiscal": true o false,
-  "sucursal": "nombre EXACTO de la sucursal elegida, o null si no se preguntó"
+  "sucursal": "nombre EXACTO de la sucursal elegida, o null si no se preguntó",
+  "tipo_cobertura": "seguro" o "particular",
+  "nombre_seguro": "nombre del seguro tal cual lo dio el cliente, o null si es particular"
 }
 [/PEDIDO_CONFIRMADO]
 
@@ -117,12 +128,18 @@ async function getReply(userMessage, pharmacyName = 'la farmacia', conversationI
     messages,
   });
 
-  const respuestaCompleta = response.content[0].text;
+  let respuestaCompleta = response.content[0].text;
+
+  const solicitaFotoMatch = respuestaCompleta.match(/\[SOLICITAR_FOTO\]([\s\S]*?)\[\/SOLICITAR_FOTO\]/);
+  const solicitaFoto = solicitaFotoMatch ? solicitaFotoMatch[1].trim() : null;
+  if (solicitaFotoMatch) {
+    respuestaCompleta = respuestaCompleta.replace(solicitaFotoMatch[0], '').trim();
+  }
 
   const pedidoMatch = respuestaCompleta.match(/\[PEDIDO_CONFIRMADO\]([\s\S]*?)\[\/PEDIDO_CONFIRMADO\]/);
 
   if (!pedidoMatch) {
-    return { texto: respuestaCompleta, pedido: null };
+    return { texto: respuestaCompleta, pedido: null, solicitaFoto };
   }
 
   const texto = respuestaCompleta.replace(pedidoMatch[0], '').trim();
@@ -134,7 +151,7 @@ async function getReply(userMessage, pharmacyName = 'la farmacia', conversationI
     console.error('No se pudo parsear el JSON de [PEDIDO_CONFIRMADO]:', err);
   }
 
-  return { texto, pedido };
+  return { texto, pedido, solicitaFoto };
 }
 
 module.exports = { getReply };

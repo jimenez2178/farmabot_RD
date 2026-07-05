@@ -66,7 +66,7 @@ async function findOrCreateConversacionActiva(farmaciaId, clienteId) {
   return created;
 }
 
-async function guardarMensaje({ conversacionId, farmaciaId, origen, contenido, whatsappMessageId }) {
+async function guardarMensaje({ conversacionId, farmaciaId, origen, contenido, whatsappMessageId, tipo }) {
   const { data, error } = await supabase
     .from('mensajes')
     .insert({
@@ -75,6 +75,7 @@ async function guardarMensaje({ conversacionId, farmaciaId, origen, contenido, w
       origen,
       contenido,
       whatsapp_message_id: whatsappMessageId,
+      tipo: tipo || 'texto',
     })
     .select()
     .single();
@@ -110,6 +111,10 @@ async function guardarPedido({
   sucursalId,
   estado,
   totalEstimado,
+  tipoCobertura,
+  nombreSeguro,
+  fotoCarnetUrl,
+  fotoCedulaUrl,
 }) {
   const { data, error } = await supabase
     .from('pedidos')
@@ -128,12 +133,39 @@ async function guardarPedido({
       sucursal_id: sucursalId,
       notas: `${medicamento} x${cantidad}`,
       total_estimado: totalEstimado,
+      tipo_cobertura: tipoCobertura,
+      nombre_seguro: nombreSeguro,
+      foto_carnet_url: fotoCarnetUrl,
+      foto_cedula_url: fotoCedulaUrl,
     }])
     .select()
     .single();
 
   if (error) throw error;
   return data;
+}
+
+// Guarda solo la RUTA del archivo en el bucket (privado), no una URL firmada:
+// las firmadas expiran, así que se generan al vuelo cuando alguien necesite ver la foto.
+async function subirDocumentoPedido({ farmaciaId, telefono, tipoDocumento, buffer, mimeType }) {
+  const extension = (mimeType || '').split('/')[1]?.split(';')[0] || 'jpg';
+  const path = `${farmaciaId}/${telefono}_${Date.now()}_${tipoDocumento}.${extension}`;
+
+  const { error } = await supabase.storage
+    .from('documentos-pedidos')
+    .upload(path, buffer, { contentType: mimeType });
+
+  if (error) throw error;
+  return path;
+}
+
+async function actualizarContextoPedido(conversacionId, contextoPedido) {
+  const { error } = await supabase
+    .from('conversaciones')
+    .update({ contexto_pedido: contextoPedido })
+    .eq('id', conversacionId);
+
+  if (error) throw error;
 }
 
 async function obtenerSucursalesActivas(farmaciaId) {
@@ -168,4 +200,6 @@ module.exports = {
   guardarPedido,
   obtenerMedicamentosFarmacia,
   obtenerSucursalesActivas,
+  subirDocumentoPedido,
+  actualizarContextoPedido,
 };

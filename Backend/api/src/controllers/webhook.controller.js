@@ -24,22 +24,30 @@ function receiveWebhook(req, res) {
   res.sendStatus(200);
 
   const value = req.body?.entry?.[0]?.changes?.[0]?.value;
-  const message = extractIncomingTextMessage(value);
+  const message = extractIncomingMessage(value);
   if (!message) return;
 
   const phoneNumberId = value?.metadata?.phone_number_id;
+  const handler = message.type === 'image' ? handleIncomingImageMessage : handleIncomingMessage;
 
-  handleIncomingMessage(message, phoneNumberId).catch((err) => {
+  handler(message, phoneNumberId).catch((err) => {
     console.error('Error procesando mensaje entrante:', err);
   });
 }
 
-function extractIncomingTextMessage(value) {
+function extractIncomingMessage(value) {
   const message = value?.messages?.[0];
+  if (!message) return null;
 
-  if (!message || message.type !== 'text') return null;
+  if (message.type === 'text') {
+    return { type: 'text', from: message.from, text: message.text.body, whatsappMessageId: message.id };
+  }
 
-  return { from: message.from, text: message.text.body, whatsappMessageId: message.id };
+  if (message.type === 'image') {
+    return { type: 'image', from: message.from, mediaId: message.image?.id, whatsappMessageId: message.id };
+  }
+
+  return null;
 }
 
 // Claude solo menciona el total en el mensaje de texto al cliente, no lo incluye
@@ -84,9 +92,122 @@ async function handleIncomingMessage(message, phoneNumberId) {
     whatsappMessageId: message.whatsappMessageId,
   });
 
-  // LLAMAR a getReply con el historial que NO incluye el mensaje actual
-  let { texto, pedido } = await claudeService.getReply(
-    message.text,
+  await continuarFlujoClaude({
+    farmacia,
+    conversacion,
+    medicamentos,
+    sucursalesActivas,
+    userMessageText: message.text,
+    historialConversacion,
+    to: message.from,
+  });
+}
+
+// Meta solo manda el ID de la imagen en el webhook; hay que descargarla y, según el
+// "paso" en el que esté la conversación (guardado en conversaciones.contexto_pedido),
+// decidir si es la foto del carnet de seguro o la de la cédula. Claude nunca ve
+// imágenes, así que esta decisión es 100% determinística, no pasa por la IA.
+async function handleIncomingImageMessage(message, phoneNumberId) {
+  const farmacia = await supabaseService.findFarmaciaByPhoneNumberId(phoneNumberId);
+  if (!farmacia) {
+    console.error(`Farmacia no encontrada para whatsapp_phone_id: ${phoneNumberId}`);
+    return;
+  }
+
+  const cliente = await supabaseService.findOrCreateCliente(farmacia.id, message.from);
+  const conversacion = await supabaseService.findOrCreateConversacionActiva(farmacia.id, cliente.id);
+
+  const contextoPedido = conversacion.contexto_pedido || {};
+  const esperandoFoto = contextoPedido.esperando_foto;
+
+  if (esperandoFoto !== 'carnet' && esperandoFoto !== 'cedula') {
+    await whatsappService.sendTextMessage(
+      message.from,
+      'Recibí tu imagen, pero en este momento no es necesaria. ¿Te ayudo con algo más?',
+    );
+    return;
+  }
+
+  const { buffer, mimeType } = await whatsappService.descargarMedia(message.mediaId);
+  const path = await supabaseService.subirDocumentoPedido({
+    farmaciaId: farmacia.id,
+    telefono: message.from,
+    tipoDocumento: esperandoFoto,
+    buffer,
+    mimeType,
+  });
+
+  if (esperandoFoto === 'carnet') {
+    await supabaseService.actualizarContextoPedido(conversacion.id, {
+      ...contextoPedido,
+      esperando_foto: 'cedula',
+      foto_carnet_url: path,
+    });
+
+    await supabaseService.guardarMensaje({
+      conversacionId: conversacion.id,
+      farmaciaId: farmacia.id,
+      origen: 'cliente',
+      contenido: '[Cliente adjuntó foto de su carnet de seguro médico]',
+      whatsappMessageId: message.whatsappMessageId,
+      tipo: 'imagen',
+    });
+
+    const texto = '¡Perfecto! Ahora envíame una foto de tu cédula, por favor.';
+    await supabaseService.guardarMensaje({
+      conversacionId: conversacion.id,
+      farmaciaId: farmacia.id,
+      origen: 'bot',
+      contenido: texto,
+    });
+    await whatsappService.sendTextMessage(message.from, texto);
+    return;
+  }
+
+  // esperandoFoto === 'cedula': ya tenemos ambos documentos, se retoma el flujo normal con Claude.
+  const nuevoContexto = { ...contextoPedido, esperando_foto: null, foto_cedula_url: path };
+  await supabaseService.actualizarContextoPedido(conversacion.id, nuevoContexto);
+
+  const historialConversacion = await supabaseService.obtenerHistorialConversacion(conversacion.id);
+  const markerTexto = '[Cliente adjuntó foto de su cédula. Documentos completos.]';
+
+  await supabaseService.guardarMensaje({
+    conversacionId: conversacion.id,
+    farmaciaId: farmacia.id,
+    origen: 'cliente',
+    contenido: markerTexto,
+    whatsappMessageId: message.whatsappMessageId,
+    tipo: 'imagen',
+  });
+
+  const medicamentos = await supabaseService.obtenerMedicamentosFarmacia(farmacia.id);
+  const sucursalesActivas = await supabaseService.obtenerSucursalesActivas(farmacia.id);
+
+  await continuarFlujoClaude({
+    farmacia,
+    conversacion: { ...conversacion, contexto_pedido: nuevoContexto },
+    medicamentos,
+    sucursalesActivas,
+    userMessageText: markerTexto,
+    historialConversacion,
+    to: message.from,
+  });
+}
+
+// Llama a Claude, guarda el pedido si ya se confirmó (incluyendo datos de seguro y
+// las fotos que se hayan recolectado hasta ahora), actualiza el "paso" de la
+// conversación si Claude pidió una foto, y responde al cliente por WhatsApp.
+async function continuarFlujoClaude({
+  farmacia,
+  conversacion,
+  medicamentos,
+  sucursalesActivas,
+  userMessageText,
+  historialConversacion,
+  to,
+}) {
+  let { texto, pedido, solicitaFoto } = await claudeService.getReply(
+    userMessageText,
     farmacia.nombre,
     conversacion.id,
     historialConversacion,
@@ -94,6 +215,8 @@ async function handleIncomingMessage(message, phoneNumberId) {
     sucursalesActivas,
   );
   console.log('Respuesta de Claude:', texto);
+
+  const contextoPedido = conversacion.contexto_pedido || {};
 
   if (pedido) {
     if (sucursalesActivas.length === 0) {
@@ -114,7 +237,7 @@ async function handleIncomingMessage(message, phoneNumberId) {
 
       await supabaseService.guardarPedido({
         farmaciaId: farmacia.id,
-        clienteId: cliente.id,
+        clienteId: conversacion.cliente_id,
         conversacionId: conversacion.id,
         medicamento: pedido.medicamento,
         cantidad: pedido.cantidad,
@@ -127,8 +250,21 @@ async function handleIncomingMessage(message, phoneNumberId) {
         sucursalId,
         estado: 'pendiente',
         totalEstimado,
+        tipoCobertura: pedido.tipo_cobertura,
+        nombreSeguro: pedido.nombre_seguro,
+        fotoCarnetUrl: contextoPedido.foto_carnet_url || null,
+        fotoCedulaUrl: contextoPedido.foto_cedula_url || null,
       });
+
+      if (Object.keys(contextoPedido).length > 0) {
+        await supabaseService.actualizarContextoPedido(conversacion.id, {});
+      }
     }
+  } else if (solicitaFoto) {
+    await supabaseService.actualizarContextoPedido(conversacion.id, {
+      ...contextoPedido,
+      esperando_foto: solicitaFoto,
+    });
   }
 
   await supabaseService.guardarMensaje({
@@ -138,7 +274,7 @@ async function handleIncomingMessage(message, phoneNumberId) {
     contenido: texto,
   });
 
-  await whatsappService.sendTextMessage(message.from, texto);
+  await whatsappService.sendTextMessage(to, texto);
 }
 
 module.exports = { verifyWebhook, receiveWebhook };
