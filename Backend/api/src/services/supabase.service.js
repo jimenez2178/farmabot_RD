@@ -90,7 +90,7 @@ async function obtenerHistorialConversacion(conversationId) {
     .select('origen, contenido')
     .eq('conversacion_id', conversationId)
     .order('fecha_envio', { ascending: false })
-    .limit(10); // Últimos 10 mensajes para no saturar el contexto de Claude
+    .limit(30); // Últimos 30 mensajes: el pedido normal + el flujo de seguro médico (fotos incluidas)
 
   if (error) throw error;
   return (data || []).reverse();
