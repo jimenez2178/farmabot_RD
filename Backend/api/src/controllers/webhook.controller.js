@@ -50,29 +50,45 @@ function extractIncomingMessage(value) {
   return null;
 }
 
-// Claude solo menciona el total en el mensaje de texto al cliente, no lo incluye
-// en el JSON del pedido. Lo recalculamos aquí a partir del catálogo (misma fuente
-// de precios que usa Claude) para no depender de que la IA haga bien la aritmética.
-function calcularTotalEstimado(nombreMedicamento, cantidad, medicamentos) {
-  if (!nombreMedicamento || !cantidad) return null;
-
-  const texto = nombreMedicamento.toLowerCase();
-  const match = medicamentos.find((m) => {
+// Busca el medicamento del catálogo que mejor coincide con el nombre que dio Claude
+// (misma fuente de precios que usa Claude, para no depender de que la IA haga bien
+// la aritmética).
+function buscarMedicamentoCatalogo(nombreMedicamento, medicamentos) {
+  const texto = (nombreMedicamento || '').toLowerCase();
+  return medicamentos.find((m) => {
     const nombre = m.nombre?.toLowerCase();
     const alterno = m.nombre_alternativo?.toLowerCase();
     return (nombre && (texto.includes(nombre) || nombre.includes(texto)))
       || (alterno && (texto.includes(alterno) || alterno.includes(texto)));
   });
+}
 
-  if (!match) return null;
-  return Number(match.precio) * Number(cantidad);
+// Un pedido puede traer varios productos (lista "productos" del JSON de Claude).
+// Cada uno se resuelve por separado contra el catálogo para armar las filas de
+// "items_pedido". Si un producto no matchea (ej. Claude lo escribió distinto a como
+// está en el catálogo), se guarda con precio 0 en vez de bloquear el pedido completo
+// — el total general se marca como "por confirmar" para que se revise a mano.
+function calcularItemsPedido(productos, medicamentos) {
+  return (productos || []).map((item) => {
+    const match = buscarMedicamentoCatalogo(item.medicamento, medicamentos);
+    const precioUnitario = match ? Number(match.precio) : 0;
+
+    return {
+      medicamentoId: match?.id || null,
+      nombreMedicamento: item.medicamento,
+      cantidad: item.cantidad,
+      precioUnitario,
+      subtotal: precioUnitario * Number(item.cantidad),
+      encontrado: !!match,
+    };
+  });
 }
 
 // El formato es exacto (emojis, separadores, líneas condicionales), así que se arma
 // aquí con los datos ya estructurados en vez de confiar en que Claude lo redacte igual
 // cada vez.
 function construirResumenPedido(pedido, {
-  sucursalNombre, totalEstimado, fotoCarnetUrl, fotoCedulaUrl,
+  sucursalNombre, items, totalEstimado, fotoCarnetUrl, fotoCedulaUrl,
 }) {
   const esDelivery = pedido.tipo_entrega === 'delivery';
   const esSeguro = pedido.tipo_cobertura === 'seguro';
@@ -82,7 +98,7 @@ function construirResumenPedido(pedido, {
     '─────────────────',
     `📍 *Sucursal:* ${sucursalNombre}`,
     '💊 *Productos:*',
-    `   • ${pedido.cantidad}x ${pedido.medicamento}`,
+    ...items.map((item) => `   • ${item.cantidad}x ${item.nombreMedicamento}`),
     `💰 *Total:* RD$${totalEstimado != null ? Number(totalEstimado).toFixed(2) : 'Por confirmar'}`,
     `🏥 *Cobertura:* ${esSeguro ? `Seguro (${pedido.nombre_seguro})` : 'Particular'}`,
   ];
@@ -264,7 +280,10 @@ async function continuarFlujoClaude({
       console.error(`Farmacia ${farmacia.id} no tiene sucursales activas registradas. Pedido no guardado.`);
       texto = 'Lo sentimos, en este momento tenemos un problema técnico para procesar tu pedido. Por favor contáctanos directamente para completarlo.';
     } else {
-      const totalEstimado = calcularTotalEstimado(pedido.medicamento, pedido.cantidad, medicamentos);
+      const items = calcularItemsPedido(pedido.productos, medicamentos);
+      const totalEstimado = items.some((item) => !item.encontrado)
+        ? null
+        : items.reduce((suma, item) => suma + item.subtotal, 0);
 
       // Con 1 sola sucursal activa se asigna automáticamente. Con varias, se usa
       // la que el cliente eligió (Claude la anota por su nombre exacto en el JSON).
@@ -278,12 +297,10 @@ async function continuarFlujoClaude({
         farmaciaId: farmacia.id,
         clienteId: conversacion.cliente_id,
         conversacionId: conversacion.id,
-        medicamento: pedido.medicamento,
-        cantidad: pedido.cantidad,
+        items,
         tipoEntrega: pedido.tipo_entrega,
         direccion: pedido.direccion,
         telefonoContacto: pedido.telefono_contacto,
-        horaEntrega: pedido.hora_entrega,
         formaPago: pedido.forma_pago,
         comprobanteFiscal: pedido.comprobanteFiscal,
         sucursalId,
@@ -301,6 +318,7 @@ async function continuarFlujoClaude({
 
       texto = construirResumenPedido(pedido, {
         sucursalNombre,
+        items,
         totalEstimado,
         fotoCarnetUrl: contextoPedido.foto_carnet_url,
         fotoCedulaUrl: contextoPedido.foto_cedula_url,

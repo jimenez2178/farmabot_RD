@@ -100,12 +100,10 @@ async function guardarPedido({
   farmaciaId,
   clienteId,
   conversacionId,
-  medicamento,
-  cantidad,
+  items,
   tipoEntrega,
   direccion,
   telefonoContacto,
-  horaEntrega,
   formaPago,
   comprobanteFiscal,
   sucursalId,
@@ -116,6 +114,8 @@ async function guardarPedido({
   fotoCarnetUrl,
   fotoCedulaUrl,
 }) {
+  const notas = items.map((item) => `${item.nombreMedicamento} x${item.cantidad}`).join(', ');
+
   const { data, error } = await supabase
     .from('pedidos')
     .insert([{
@@ -127,11 +127,10 @@ async function guardarPedido({
       tipo_entrega: tipoEntrega === 'retiro' ? 'recoger' : tipoEntrega,
       direccion_entrega: direccion,
       telefono_contacto: telefonoContacto,
-      hora_entrega: horaEntrega,
       forma_pago: formaPago,
       comprobante_fiscal: !!comprobanteFiscal,
       sucursal_id: sucursalId,
-      notas: `${medicamento} x${cantidad}`,
+      notas,
       total_estimado: totalEstimado,
       tipo_cobertura: tipoCobertura,
       nombre_seguro: nombreSeguro,
@@ -142,6 +141,20 @@ async function guardarPedido({
     .single();
 
   if (error) throw error;
+
+  const { error: itemsError } = await supabase
+    .from('items_pedido')
+    .insert(items.map((item) => ({
+      pedido_id: data.id,
+      medicamento_id: item.medicamentoId,
+      nombre_medicamento: item.nombreMedicamento,
+      precio_unitario: item.precioUnitario,
+      cantidad: item.cantidad,
+      subtotal: item.subtotal,
+    })));
+
+  if (itemsError) throw itemsError;
+
   return data;
 }
 
@@ -194,7 +207,7 @@ async function obtenerSucursalesActivas(farmaciaId) {
 async function obtenerMedicamentosFarmacia(farmaciaId) {
   const { data, error } = await supabase
     .from('medicamentos')
-    .select('nombre, nombre_alternativo, categoria, precio')
+    .select('id, nombre, nombre_alternativo, categoria, precio')
     .eq('farmacia_id', farmaciaId)
     .eq('disponible', true);
 
