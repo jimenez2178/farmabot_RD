@@ -309,6 +309,7 @@ async function continuarFlujoClaude({
       if (Object.keys(contextoPedido).length > 0) {
         await supabaseService.actualizarContextoPedido(conversacion.id, {});
       }
+      await supabaseService.cerrarConversacion(conversacion.id);
     }
   } else if (solicitaFoto) {
     await supabaseService.actualizarContextoPedido(conversacion.id, {

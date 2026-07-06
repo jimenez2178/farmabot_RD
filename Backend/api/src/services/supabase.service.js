@@ -168,6 +168,18 @@ async function actualizarContextoPedido(conversacionId, contextoPedido) {
   if (error) throw error;
 }
 
+// Se cierra al confirmar un pedido para que el siguiente mensaje de este cliente
+// arranque una conversación NUEVA (historial vacío, contexto_pedido en '{}'), en vez
+// de seguir acumulando mensajes y estado de pedidos ya resueltos indefinidamente.
+async function cerrarConversacion(conversacionId) {
+  const { error } = await supabase
+    .from('conversaciones')
+    .update({ estado: 'cerrada' })
+    .eq('id', conversacionId);
+
+  if (error) throw error;
+}
+
 async function obtenerSucursalesActivas(farmaciaId) {
   const { data, error } = await supabase
     .from('sucursales')
@@ -202,4 +214,5 @@ module.exports = {
   obtenerSucursalesActivas,
   subirDocumentoPedido,
   actualizarContextoPedido,
+  cerrarConversacion,
 };
